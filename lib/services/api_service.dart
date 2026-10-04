@@ -12,19 +12,17 @@ import '../core/database/db_helper.dart';
 
 class ApiService {
   // ==================== تنظیمات ====================
-  /// آدرس سرور
   static String baseUrl = 'https://api.fanoosy.ir/api';
 
-  /// آدرس پایه بدون /api (برای ساخت URL فایل‌ها)
-  /// فقط اگر baseUrl با /api یا /api/ تمام شود، آن را حذف می‌کند
   static String get fileBaseUrl {
-    if (baseUrl.endsWith('/api/')) {
-      return baseUrl.substring(0, baseUrl.length - 5);
+    final url = baseUrl;
+    if (url.endsWith('/api/')) {
+      return url.substring(0, url.length - 5);
     }
-    if (baseUrl.endsWith('/api')) {
-      return baseUrl.substring(0, baseUrl.length - 4);
+    if (url.endsWith('/api')) {
+      return url.substring(0, url.length - 4);
     }
-    return baseUrl;
+    return url;
   }
 
   static const Duration _timeout = Duration(seconds: 30);
@@ -188,9 +186,8 @@ class ApiService {
   static Future<bool> isServerAvailable() async {
     try {
       final uri = Uri.parse('$baseUrl/health');
-      final response = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 5));
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 5));
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -239,6 +236,7 @@ class ApiService {
   // ==================== کتاب‌ها ====================
 
   /// دریافت کتاب‌ها از سرور و ذخیره در دیتابیس محلی
+  /// 🔑 برگرداندن لیست با ID محلی (نه سرور)
   static Future<List<BookModel>> fetchBooksAndCache({
     String? type,
     String? category,
@@ -255,38 +253,59 @@ class ApiService {
       final data = _handleResponse(response) as List;
       debugPrint('📚 Server returned ${data.length} books');
 
-      final books = data.map((e) => BookModel.fromMap(e)).toList();
+      final serverBooks = data.map((e) => BookModel.fromMap(e)).toList();
 
-      if (books.isNotEmpty) {
-        await _saveBooksLocally(books);
-        debugPrint('📚 Saved ${books.length} books to local DB');
+      if (serverBooks.isNotEmpty) {
+        await _saveBooksLocally(serverBooks);
+        debugPrint('📚 Saved ${serverBooks.length} books to local DB');
       }
 
-      return books;
+      // 🔑 مهم: همیشه از دیتابیس محلی بخوان تا ID محلی داشته باشی
+      final localBooks = await DBHelper.getAllBooks();
+      debugPrint('📚 Returning ${localBooks.length} books (local IDs)');
+      return localBooks;
     } catch (e) {
       debugPrint('❌ fetchBooksAndCache error: $e');
       return await DBHelper.getAllBooks();
     }
   }
 
-  /// ذخیره کتاب‌ها در دیتابیس محلی (با حفظ وضعیت دانلود)
-  static Future<void> _saveBooksLocally(List<BookModel> books) async {
-    for (final book in books) {
+  /// ذخیره کتاب‌ها در دیتابیس محلی
+  /// کتاب‌های موجود را آپدیت می‌کند، کتاب‌های جدید را درج می‌کند
+  static Future<void> _saveBooksLocally(List<BookModel> serverBooks) async {
+    for (final serverBook in serverBooks) {
       try {
-        final existing = await DBHelper.findBookByTitle(book.title);
+        // پیدا کردن کتاب با همین عنوان در دیتابیس محلی
+        final existing = await DBHelper.findBookByTitle(serverBook.title);
+
         if (existing != null) {
-          final updated = book.copyWith(
+          // کتاب موجود → فقط اطلاعات غیرمحلی را آپدیت کن
+          final updated = BookModel(
+            // 🔑 ID محلی را نگه دار
             id: existing.id,
+            title: serverBook.title,
+            author: serverBook.author,
+            description: serverBook.description,
+            coverUrl: serverBook.coverUrl,
+            fileUrl: serverBook.fileUrl,
+            // 🔑 مسیر فایل دانلود شده را نگه دار
             filePath: existing.filePath,
+            fileSize: serverBook.fileSize,
+            type: serverBook.type,
+            category: serverBook.category,
+            rating: serverBook.rating,
+            ratingCount: serverBook.ratingCount,
+            // 🔑 وضعیت دانلود را نگه دار
             isDownloaded: existing.isDownloaded,
             downloadedAt: existing.downloadedAt,
           );
           await DBHelper.updateBook(updated);
         } else {
-          await DBHelper.insertBook(book);
+          // کتاب جدید → درج کن
+          await DBHelper.insertBook(serverBook);
         }
       } catch (e) {
-        debugPrint('Save book error for "${book.title}": $e');
+        debugPrint('Save book error for "${serverBook.title}": $e');
       }
     }
   }
@@ -307,89 +326,6 @@ class ApiService {
       debugPrint('fetchBookDetail error: $e');
       return null;
     }
-  }
-
-  // ==================== دانلود فایل ====================
-
-  static Future<String?> downloadBookFile({
-    required int bookId,
-    required String fileUrl,
-    required String fileName,
-    Function(double progress)? onProgress,
-  }) async {
-    try {
-      // ساخت URL صحیح
-      String fullUrl;
-      if (fileUrl.startsWith('http')) {
-        fullUrl = fileUrl;
-      } else {
-        final cleanBase = fileBaseUrl.endsWith('/')
-            ? fileBaseUrl.substring(0, fileBaseUrl.length - 1)
-            : fileBaseUrl;
-        final cleanPath =
-            fileUrl.startsWith('/') ? fileUrl : '/$fileUrl';
-        fullUrl = '$cleanBase$cleanPath';
-      }
-
-      debugPrint('🌐 Download URL: $fullUrl');
-      final uri = Uri.parse(fullUrl);
-
-      final directory = await _getDownloadDirectory();
-      final filePath = '${directory.path}/$fileName';
-      final file = File(filePath);
-
-      if (await file.exists()) {
-        return filePath;
-      }
-
-      final request = http.Request('GET', uri);
-      request.headers.addAll(_headers);
-      final streamedResponse = await request.send().timeout(_timeout);
-
-      if (streamedResponse.statusCode != 200) {
-        throw ApiException(
-          'خطا در دانلود فایل (${streamedResponse.statusCode})',
-          streamedResponse.statusCode,
-        );
-      }
-
-      final contentLength = streamedResponse.contentLength ?? 0;
-      int downloaded = 0;
-
-      final sink = file.openWrite();
-      await for (final chunk in streamedResponse.stream) {
-        sink.add(chunk);
-        downloaded += chunk.length;
-        if (contentLength > 0 && onProgress != null) {
-          onProgress(downloaded / contentLength);
-        }
-      }
-      await sink.flush();
-      await sink.close();
-
-      return filePath;
-    } catch (e) {
-      debugPrint('downloadBookFile error: $e');
-      return null;
-    }
-  }
-
-  static Future<Directory> _getDownloadDirectory() async {
-    final directory = Directory('${await _getAppDirectory()}/books');
-    if (!await directory.exists()) {
-      await directory.create(recursive: true);
-    }
-    return directory;
-  }
-
-  static Future<String> _getAppDirectory() async {
-    if (Platform.isAndroid) {
-      return '/storage/emulated/0/Android/data/com.example.shahid_suleimani_library/files';
-    } else if (Platform.isIOS) {
-      final dir = await Directory.systemTemp.createTemp();
-      return dir.path;
-    }
-    return Directory.current.path;
   }
 
   // ==================== امتیازات ====================
