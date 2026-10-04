@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:universal_downloader/universal_downloader.dart';
 
 import '../../data/models/book_model.dart';
 import '../database/db_helper.dart';
@@ -17,91 +16,98 @@ class DownloadService {
   double? progressFor(int bookId) => _progress[bookId];
   bool isDownloading(int bookId) => _downloading[bookId] == true;
 
-  /// دانلود یک کتاب با نمایش پیشرفت
+  /// دانلود فایل با استفاده از universal_downloader
+  /// [baseUrl] باید آدرس پایه بدون /api باشد (مثال: https://api.fanoosy.ir)
   Future<String?> download({
     required BookModel book,
     required String baseUrl,
     Function(double)? onProgress,
   }) async {
-    if (book.id == null) return null;
+    // ========== اعتبارسنجی اولیه ==========
+    if (book.id == null) {
+      debugPrint('❌ Download: book.id == null');
+      return null;
+    }
     final bookId = book.id!;
 
-    if (_downloading[bookId] == true) return null;
+    if (_downloading[bookId] == true) {
+      debugPrint('⚠️ Already downloading book $bookId');
+      return null;
+    }
+
     _downloading[bookId] = true;
     _progress[bookId] = 0;
     onProgress?.call(0);
 
     try {
-      // ساخت پوشه‌های ذخیره
-      final appDir = await getApplicationDocumentsDirectory();
-      final subFolder = _folderFor(book.type);
-      final dir = Directory('${appDir.path}/library/$subFolder');
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
+      // ========== ساخت URL کامل و صحیح ==========
+      String fullUrl;
+      if (book.fileUrl.startsWith('http')) {
+        // اگر fileUrl از قبل کامل است (http/https)
+        fullUrl = book.fileUrl;
+      } else {
+        // اطمینان از اینکه baseUrl با / تمام نشود و fileUrl با / شروع شود
+        final cleanBase = baseUrl.endsWith('/')
+            ? baseUrl.substring(0, baseUrl.length - 1)
+            : baseUrl;
+        final cleanPath =
+            book.fileUrl.startsWith('/') ? book.fileUrl : '/${book.fileUrl}';
+        fullUrl = '$cleanBase$cleanPath';
       }
 
-      // نام فایل
+      debugPrint('🌐 Download URL: $fullUrl');
+
+      // ========== تعیین نام فایل ==========
       final ext = _extensionFor(book.type);
       final fileName = 'book_${book.id}_${_sanitize(book.title)}.$ext';
-      final filePath = '${dir.path}/$fileName';
-      final file = File(filePath);
 
-      // اگر قبلاً دانلود شده، برگردان
-      if (await file.exists()) {
-        await _markDownloaded(book, filePath);
-        _progress[bookId] = 1.0;
-        onProgress?.call(1.0);
-        _downloading[bookId] = false;
-        return filePath;
-      }
-
-      // URL کامل
-      final url = book.fileUrl.startsWith('http')
-          ? book.fileUrl
-          : '$baseUrl${book.fileUrl}';
-
-      // دانلود با stream برای نمایش پیشرفت
-      final request = http.Request('GET', Uri.parse(url));
-      final response = await request.send();
-
-      if (response.statusCode != 200) {
-        throw Exception('خطای سرور: ${response.statusCode}');
-      }
-
-      final contentLength = response.contentLength ?? 0;
-      int received = 0;
-      final sink = file.openWrite();
-
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        received += chunk.length;
-        if (contentLength > 0) {
-          final p = received / contentLength;
+      // ========== اجرای دانلود ==========
+      final result = await UniversalDownloader.downloadFromUrlStream(
+        url: fullUrl,
+        filename: fileName,
+        onProgress: (progress) {
+          final p = progress.percentage / 100;
           _progress[bookId] = p;
           onProgress?.call(p);
-        }
+        },
+        onComplete: (filePath) {
+          debugPrint('✅ Download complete: $filePath');
+        },
+        onError: (error) {
+          debugPrint('❌ Download error: $error');
+        },
+      );
+
+      // ========== بررسی نتیجه ==========
+      if (!result.isSuccess) {
+        throw Exception(result.errorMessage ?? 'Unknown download error');
       }
 
-      await sink.flush();
-      await sink.close();
+      final savedPath = result.filePath;
+      if (savedPath == null || savedPath.isEmpty) {
+        throw Exception('File path is null after download');
+      }
 
-      // ثبت در دیتابیس
-      await _markDownloaded(book, filePath);
+      // ========== ذخیره در دیتابیس ==========
+      await _markDownloaded(book, savedPath);
 
       _progress[bookId] = 1.0;
       onProgress?.call(1.0);
-      return filePath;
-    } catch (e) {
-      debugPrint('Download error: $e');
+
+      return savedPath;
+    } catch (e, stackTrace) {
+      debugPrint('❌❌❌ DOWNLOAD FAILED');
+      debugPrint('❌ Error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
       _progress[bookId] = 0;
-      _downloading[bookId] = false;
       return null;
     } finally {
       _downloading[bookId] = false;
     }
   }
 
-  /// حذف فایل دانلودشده
+  // ==================== حذف دانلود ====================
+
   Future<bool> deleteDownload(BookModel book) async {
     if (book.id == null) return false;
     try {
@@ -127,6 +133,8 @@ class DownloadService {
     }
   }
 
+  // ==================== توابع کمکی ====================
+
   Future<void> _markDownloaded(BookModel book, String path) async {
     final db = await DBHelper.database;
     await db.update(
@@ -139,19 +147,6 @@ class DownloadService {
       where: 'id = ?',
       whereArgs: [book.id],
     );
-  }
-
-  String _folderFor(String type) {
-    switch (type) {
-      case 'pdf':
-        return 'books';
-      case 'audio':
-        return 'audio';
-      case 'video':
-        return 'video';
-      default:
-        return 'other';
-    }
   }
 
   String _extensionFor(String type) {
