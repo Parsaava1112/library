@@ -32,6 +32,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
     _checkDownloaded();
   }
 
+  /// بررسی وضعیت دانلود از دیتابیس (با ID محلی)
   Future<void> _checkDownloaded() async {
     if (_book.id == null) return;
     final fresh = await DBHelper.getBookById(_book.id!);
@@ -50,7 +51,6 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
     try {
       final path = await DownloadService().download(
         book: _book,
-        // ✅ اصلاح: استفاده از fileBaseUrl (بدون /api)
         baseUrl: ApiService.fileBaseUrl,
         onProgress: (p) {
           if (mounted) setState(() => _progress = p);
@@ -61,6 +61,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
 
       if (path != null) {
         await _checkDownloaded();
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -192,13 +193,13 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
                   child: Padding(
                     padding: const EdgeInsets.only(top: 40, bottom: 20),
                     child: Hero(
-                      tag: 'book_${_book.id}',
+                      // 🔑 Hero tag یکتا بر اساس ID محلی - باید با home_screen.dart یکی باشد
+                      tag: 'book_cover_${_book.id}',
                       child: BookCover(
                         book: _book,
                         width: 160,
                         height: 220,
                         radius: 16,
-                        // ✅ اصلاح: استفاده از fileBaseUrl
                         baseUrl: ApiService.fileBaseUrl,
                       ),
                     ),
@@ -387,6 +388,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
   }
 
   Widget _buildActionButtons(ThemeData theme) {
+    // ============ اگر دانلود شده: دکمه‌های باز کردن و حذف ============
     if (_book.isDownloaded) {
       return Column(
         children: [
@@ -434,6 +436,7 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
       ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0);
     }
 
+    // ============ اگر دانلود نشده: دکمه دریافت ============
     return Column(
       children: [
         SizedBox(
