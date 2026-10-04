@@ -48,17 +48,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      // راه‌اندازی سرویس دستاورد
       await AchievementService.initialize();
 
-      // 🔄 مرحله ۱: دریافت کتاب‌ها از سرور و ذخیره در دیتابیس محلی
       List<BookModel> books = [];
       try {
         final serverAvailable = await ApiService.isServerAvailable();
         if (serverAvailable) {
           debugPrint('📚 Server available, fetching books...');
           books = await ApiService.fetchBooksAndCache();
-          debugPrint('📚 Books from server: ${books.length}');
+          debugPrint('📚 Books from server (with local IDs): ${books.length}');
         } else {
           debugPrint('⚠️ Server not available, using local DB');
         }
@@ -66,23 +64,17 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('❌ Server fetch error: $e');
       }
 
-      // 🔄 مرحله ۲: اگر سرور کتابی نداشت، از دیتابیس محلی بخوان
       if (books.isEmpty) {
         books = await DBHelper.getAllBooks();
         debugPrint('📚 Books from local DB: ${books.length}');
       }
 
-      // 🔄 مرحله ۳: اگر هر دو خالی بودند، داده نمونه بساز
-      if (books.isEmpty) {
-        debugPrint('⚠️ No books found, seeding sample data');
-        await _seedSampleData();
-        books = await DBHelper.getAllBooks();
-      }
+      // ⚠️ حذف seed SampleData که باعث اشتباه می‌شد
+      // اگر هیچ کتابی نبود، لیست خالی بمان
+      // (کاربر می‌تواند با همگام‌سازی، کتاب‌ها را از سرور بگیرد)
 
-      // کاربر جاری
       final user = await ApiService.getCurrentUser();
 
-      // آمار
       Map<String, dynamic> stats = {
         'total_books_read': 0,
         'total_minutes_read': 0,
@@ -97,7 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
       setState(() {
         _books = books;
-        _filteredBooks = books;
+        _applyFilter();
         _user = user;
         _stats = stats;
         _loading = false;
@@ -108,71 +100,19 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _seedSampleData() async {
-    final samples = [
-      BookModel(
-        title: 'خاطرات شهید سلیمانی',
-        author: 'موسسه شهید',
-        description: 'مجموعه‌ای از خاطرات و زندگی‌نامه شهید حاج قاسم سلیمانی',
-        coverUrl: '',
-        fileUrl: '',
-        filePath: '',
-        type: 'pdf',
-        category: 'کتاب',
-        rating: 4.8,
-        ratingCount: 120,
-      ),
-      BookModel(
-        title: 'از چیزی نمی‌ترسم',
-        author: 'محمود فروتن',
-        description: 'روایت‌های کمتر شنیده‌شده از شهید سلیمانی',
-        coverUrl: '',
-        fileUrl: '',
-        filePath: '',
-        type: 'pdf',
-        category: 'کتاب',
-        rating: 4.7,
-        ratingCount: 95,
-      ),
-      BookModel(
-        title: 'کتاب صوتی مالک اشتر',
-        author: 'راوی: علی محمدی',
-        description: 'روایت زندگی مالک اشتر، یار باوفای امیرالمؤمنین',
-        coverUrl: '',
-        fileUrl: '',
-        filePath: '',
-        type: 'audio',
-        category: 'کتاب صوتی',
-        rating: 4.5,
-        ratingCount: 85,
-      ),
-      BookModel(
-        title: 'پادکست تصویری سردار دل‌ها',
-        author: 'گروه رسانه',
-        description: 'مستند تصویری از زندگی و مجاهدت شهید سلیمانی',
-        coverUrl: '',
-        fileUrl: '',
-        filePath: '',
-        type: 'video',
-        category: 'پادکست تصویری',
-        rating: 4.9,
-        ratingCount: 200,
-      ),
-    ];
-    for (final b in samples) {
-      await DBHelper.insertBook(b);
+  void _applyFilter() {
+    if (_selectedCategory == 'همه') {
+      _filteredBooks = List.from(_books);
+    } else {
+      final type = _getTypeFromCategory(_selectedCategory);
+      _filteredBooks = _books.where((b) => b.type == type).toList();
     }
   }
 
   void _filterBooks(String category) {
     setState(() {
       _selectedCategory = category;
-      if (category == 'همه') {
-        _filteredBooks = _books;
-      } else {
-        final type = _getTypeFromCategory(category);
-        _filteredBooks = _books.where((b) => b.type == type).toList();
-      }
+      _applyFilter();
     });
   }
 
@@ -290,7 +230,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                );
+                ).then((_) => _loadAll());
               },
             ),
             const SizedBox(width: 12),
@@ -418,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         MaterialPageRoute(
                           builder: (_) => const AchievementsScreen(),
                         ),
-                      );
+                      ).then((_) => _loadAll());
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: Container(
@@ -630,18 +570,22 @@ class _HomeScreenState extends State<HomeScreen> {
       sliver: SliverList.builder(
         itemCount: _filteredBooks.length,
         itemBuilder: (context, i) {
+          final book = _filteredBooks[i];
           return _BookCard(
-            book: _filteredBooks[i],
+            // 🔑 کلید یکتا بر اساس ID محلی کتاب
+            key: ValueKey('book_card_${book.id}'),
+            book: book,
             index: i,
             onTap: () async {
               await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) =>
-                      BookDetailScreen(book: _filteredBooks[i]),
+                  // 🔑 پاس دادن همان کتاب با ID محلی درست
+                  builder: (_) => BookDetailScreen(book: book),
                 ),
               );
-              _loadAll();
+              // 🔄 بعد از بازگشت، لیست را رفرش کن (برای وضعیت دانلود)
+              await _loadAll();
             },
           );
         },
@@ -658,6 +602,7 @@ class _BookCard extends StatelessWidget {
   final VoidCallback onTap;
 
   const _BookCard({
+    super.key,
     required this.book,
     required this.index,
     required this.onTap,
@@ -707,8 +652,9 @@ class _BookCard extends StatelessWidget {
             ),
             child: Row(
               children: [
+                // 🔑 Hero tag یکتا بر اساس ID محلی
                 Hero(
-                  tag: 'book_${book.id}',
+                  tag: 'book_cover_${book.id}',
                   child: BookCover(
                     book: book,
                     width: 64,
