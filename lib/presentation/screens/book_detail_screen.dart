@@ -47,58 +47,74 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
       _progress = 0;
     });
 
-    final path = await DownloadService().download(
-      book: _book,
-      baseUrl: ApiService.baseUrl.replaceAll('/api', ''),
-      onProgress: (p) {
-        if (mounted) setState(() => _progress = p);
-      },
-    );
-
-    if (!mounted) return;
-
-    if (path != null) {
-      // رفرش کتاب
-      await _checkDownloaded();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle_rounded, color: Colors.white),
-              const SizedBox(width: 10),
-              Text(
-                'کتاب با موفقیت دانلود شد',
-                style: GoogleFonts.vazirmatn(),
-              ),
-            ],
-          ),
-          backgroundColor: Colors.green.shade700,
-        ),
+    try {
+      final path = await DownloadService().download(
+        book: _book,
+        // ✅ اصلاح: استفاده از fileBaseUrl (بدون /api)
+        baseUrl: ApiService.fileBaseUrl,
+        onProgress: (p) {
+          if (mounted) setState(() => _progress = p);
+        },
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'خطا در دانلود کتاب',
-            style: GoogleFonts.vazirmatn(),
+
+      if (!mounted) return;
+
+      if (path != null) {
+        await _checkDownloaded();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white),
+                const SizedBox(width: 10),
+                Text(
+                  'کتاب با موفقیت دانلود شد',
+                  style: GoogleFonts.vazirmatn(),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green.shade700,
           ),
-          backgroundColor: Colors.red.shade700,
-        ),
-      );
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'خطا در دانلود کتاب',
+              style: GoogleFonts.vazirmatn(),
+            ),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ _download error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطا: $e', style: GoogleFonts.vazirmatn()),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _downloading = false;
+          _progress = 0;
+        });
+      }
     }
-
-    setState(() {
-      _downloading = false;
-      _progress = 0;
-    });
   }
 
   Future<void> _delete() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('حذف دانلود',
-            style: GoogleFonts.vazirmatn(fontWeight: FontWeight.bold)),
+        title: Text(
+          'حذف دانلود',
+          style: GoogleFonts.vazirmatn(fontWeight: FontWeight.bold),
+        ),
         content: Text(
           'آیا می‌خواهید این کتاب را از حافظه حذف کنید؟',
           style: GoogleFonts.vazirmatn(),
@@ -182,8 +198,8 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
                         width: 160,
                         height: 220,
                         radius: 16,
-                        baseUrl:
-                            ApiService.baseUrl.replaceAll('/api', ''),
+                        // ✅ اصلاح: استفاده از fileBaseUrl
+                        baseUrl: ApiService.fileBaseUrl,
                       ),
                     ),
                   ),
@@ -371,7 +387,6 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
   }
 
   Widget _buildActionButtons(ThemeData theme) {
-    // اگر دانلود شده → دکمه خواندن + حذف
     if (_book.isDownloaded) {
       return Column(
         children: [
@@ -419,7 +434,6 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
       ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0);
     }
 
-    // اگر دانلود نشده → دکمه دریافت
     return Column(
       children: [
         SizedBox(
