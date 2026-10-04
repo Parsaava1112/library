@@ -3,165 +3,74 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/database/db_helper.dart';
-import '../../core/services/download_service.dart';
 import '../../data/models/book_model.dart';
 import '../../services/api_service.dart';
+import '../widgets/animated_background.dart';
 import '../widgets/book_cover.dart';
-import '../widgets/rating_widget.dart';
-import 'pdf_reader_screen.dart';
-import 'audio_player_screen.dart';
-import 'video_player_screen.dart';
+import 'book_detail_screen.dart';
 
-class BookDetailScreen extends StatefulWidget {
-  final BookModel book;
-  const BookDetailScreen({super.key, required this.book});
+class MyBooksScreen extends StatefulWidget {
+  const MyBooksScreen({super.key});
 
   @override
-  State<BookDetailScreen> createState() => _BookDetailScreenState();
+  State<MyBooksScreen> createState() => _MyBooksScreenState();
 }
 
-class _BookDetailScreenState extends State<BookDetailScreen> {
-  late BookModel _book;
-  bool _downloading = false;
-  double _progress = 0;
+class _MyBooksScreenState extends State<MyBooksScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tab;
+  List<BookModel> _all = [];
+  bool _loading = true;
+
+  final _tabs = ['همه', 'کتاب', 'صوتی', 'ویدیویی'];
 
   @override
   void initState() {
     super.initState();
-    _book = widget.book;
-    _checkDownloaded();
+    _tab = TabController(length: _tabs.length, vsync: this);
+    _tab.addListener(() => setState(() {}));
+    _load();
   }
 
-  Future<void> _checkDownloaded() async {
-    if (_book.id == null) return;
-    final fresh = await DBHelper.getBookById(_book.id!);
-    if (fresh != null && mounted) {
-      setState(() => _book = fresh);
-    }
-  }
-
-  Future<void> _download() async {
-    if (_downloading) return;
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final list = await DBHelper.getDownloadedBooks();
+    if (!mounted) return;
     setState(() {
-      _downloading = true;
-      _progress = 0;
+      _all = list;
+      _loading = false;
     });
-
-    try {
-      final path = await DownloadService().download(
-        book: _book,
-        // ✅ اصلاح: استفاده از fileBaseUrl (بدون /api)
-        baseUrl: ApiService.fileBaseUrl,
-        onProgress: (p) {
-          if (mounted) setState(() => _progress = p);
-        },
-      );
-
-      if (!mounted) return;
-
-      if (path != null) {
-        await _checkDownloaded();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white),
-                const SizedBox(width: 10),
-                Text(
-                  'کتاب با موفقیت دانلود شد',
-                  style: GoogleFonts.vazirmatn(),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.green.shade700,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'خطا در دانلود کتاب',
-              style: GoogleFonts.vazirmatn(),
-            ),
-            backgroundColor: Colors.red.shade700,
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint('❌ _download error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('خطا: $e', style: GoogleFonts.vazirmatn()),
-            backgroundColor: Colors.red.shade700,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _downloading = false;
-          _progress = 0;
-        });
-      }
-    }
   }
 
-  Future<void> _delete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          'حذف دانلود',
-          style: GoogleFonts.vazirmatn(fontWeight: FontWeight.bold),
-        ),
-        content: Text(
-          'آیا می‌خواهید این کتاب را از حافظه حذف کنید؟',
-          style: GoogleFonts.vazirmatn(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('انصراف', style: GoogleFonts.vazirmatn()),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text('حذف', style: GoogleFonts.vazirmatn()),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      await DownloadService().deleteDownload(_book);
-      await _checkDownloaded();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('حذف شد', style: GoogleFonts.vazirmatn()),
-          ),
-        );
-      }
-    }
-  }
-
-  void _open() {
-    Widget screen;
-    switch (_book.type) {
-      case 'audio':
-        screen = AudioPlayerScreen(book: _book);
-        break;
-      case 'video':
-        screen = VideoPlayerScreen(book: _book);
-        break;
+  List<BookModel> _filtered() {
+    switch (_tab.index) {
+      case 1:
+        return _all.where((b) => b.type == 'pdf').toList();
+      case 2:
+        return _all.where((b) => b.type == 'audio').toList();
+      case 3:
+        return _all.where((b) => b.type == 'video').toList();
       default:
-        screen = PdfReaderScreen(book: _book);
+        return _all;
     }
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
+  }
+
+  int get _totalSize => _all.fold(0, (sum, b) => sum + b.fileSize);
+
+  String get _readableTotalSize {
+    if (_totalSize < 1024 * 1024) {
+      return '${(_totalSize / 1024).toStringAsFixed(1)} KB';
+    }
+    if (_totalSize < 1024 * 1024 * 1024) {
+      return '${(_totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(_totalSize / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
   }
 
   @override
@@ -169,314 +78,257 @@ class _BookDetailScreenState extends State<BookDetailScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       backgroundColor: theme.colorScheme.background,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 320,
-            pinned: true,
-            backgroundColor: theme.colorScheme.primary,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      theme.colorScheme.primary,
-                      theme.colorScheme.primary.withOpacity(0.7),
-                      theme.colorScheme.background,
-                    ],
-                  ),
-                ),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 40, bottom: 20),
-                    child: Hero(
-                      tag: 'book_${_book.id}',
-                      child: BookCover(
-                        book: _book,
-                        width: 160,
-                        height: 220,
-                        radius: 16,
-                        // ✅ اصلاح: استفاده از fileBaseUrl
-                        baseUrl: ApiService.fileBaseUrl,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: Text(
+          'کتاب‌های من',
+          style: GoogleFonts.vazirmatn(fontWeight: FontWeight.bold),
+        ),
+        bottom: TabBar(
+          controller: _tab,
+          isScrollable: true,
+          indicatorColor: theme.colorScheme.primary,
+          labelColor: theme.colorScheme.primary,
+          unselectedLabelColor:
+              theme.colorScheme.onSurface.withOpacity(0.5),
+          labelStyle: GoogleFonts.vazirmatn(
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+          ),
+          tabs: _tabs.map((t) => Tab(text: t)).toList(),
+        ),
+      ),
+      body: AnimatedBackground(
+        blobCount: 3,
+        intensity: 0.5,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: _load,
+                color: theme.colorScheme.primary,
+                child: CustomScrollView(
+                  slivers: [
+                    SliverToBoxAdapter(child: _buildSummary(theme)),
+                    if (_filtered().isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: _buildEmpty(theme),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.all(16),
+                        sliver: SliverGrid.builder(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 14,
+                            mainAxisSpacing: 14,
+                            childAspectRatio: 0.62,
+                          ),
+                          itemCount: _filtered().length,
+                          itemBuilder: (context, i) {
+                            return _bookGridItem(
+                                theme, _filtered()[i], i);
+                          },
+                        ),
                       ),
-                    ),
-                  ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 60)),
+                  ],
                 ),
               ),
-            ),
+      ),
+    );
+  }
+
+  Widget _buildSummary(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: [
+              theme.colorScheme.primary,
+              theme.colorScheme.secondary,
+            ],
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: theme.colorScheme.primary.withOpacity(0.3),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.folder_rounded,
+                  color: Colors.white, size: 28),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildTitle(theme),
-                  const SizedBox(height: 16),
-                  _buildInfoRow(theme),
-                  const SizedBox(height: 24),
-                  _buildDescription(theme),
-                  const SizedBox(height: 24),
-                  _buildActionButtons(theme),
-                  const SizedBox(height: 24),
-                  RatingWidget(
-                    bookId: _book.id ?? 0,
-                    initialRating: _book.rating,
-                    onRatingChanged: (value) {
-                      _checkDownloaded();
-                    },
+                  Text(
+                    '${_all.length} اثر ذخیره شده',
+                    style: GoogleFonts.vazirmatn(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
                   ),
-                  const SizedBox(height: 40),
+                  Text(
+                    'حجم کل: $_readableTotalSize',
+                    style: GoogleFonts.vazirmatn(
+                      fontSize: 12,
+                      color: Colors.white.withOpacity(0.9),
+                    ),
+                  ),
                 ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTitle(ThemeData theme) {
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _book.title,
-                style: GoogleFonts.vazirmatn(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  color: theme.colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _book.author,
-                style: GoogleFonts.vazirmatn(
-                  fontSize: 14,
-                  color: theme.colorScheme.onSurface.withOpacity(0.6),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (_book.isDownloaded)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.green.shade100,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.download_done_rounded,
-                    size: 16, color: Colors.green.shade800),
-                const SizedBox(width: 4),
-                Text(
-                  'دانلود شده',
-                  style: GoogleFonts.vazirmatn(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.green.shade800,
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    ).animate().fadeIn().slideY(begin: 0.15, end: 0);
-  }
-
-  Widget _buildInfoRow(ThemeData theme) {
-    return Row(
-      children: [
-        _infoChip(
-          theme,
-          Icons.star_rounded,
-          '${_book.rating.toStringAsFixed(1)} (${_book.ratingCount})',
-          theme.colorScheme.secondary,
-        ),
-        const SizedBox(width: 8),
-        _infoChip(
-          theme,
-          _book.type == 'pdf'
-              ? Icons.picture_as_pdf_rounded
-              : _book.type == 'audio'
-                  ? Icons.headphones_rounded
-                  : Icons.videocam_rounded,
-          _book.category,
-          theme.colorScheme.primary,
-        ),
-        if (_book.fileSize > 0) ...[
-          const SizedBox(width: 8),
-          _infoChip(
-            theme,
-            Icons.storage_rounded,
-            _book.readableSize,
-            Colors.blueGrey,
-          ),
-        ],
-      ],
-    ).animate().fadeIn(delay: 100.ms);
-  }
-
-  Widget _infoChip(
-      ThemeData theme, IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: color),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: GoogleFonts.vazirmatn(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDescription(ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.description_rounded,
-                size: 18, color: theme.colorScheme.primary),
-            const SizedBox(width: 6),
-            Text(
-              'درباره این اثر',
-              style: GoogleFonts.vazirmatn(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        Text(
-          _book.description.isEmpty
-              ? 'توضیحی برای این اثر ثبت نشده است.'
-              : _book.description,
-          style: GoogleFonts.vazirmatn(
-            fontSize: 14,
-            height: 1.9,
-            color: theme.colorScheme.onSurface.withOpacity(0.8),
-          ),
-        ),
-      ],
-    ).animate().fadeIn(delay: 200.ms);
+      ).animate().fadeIn().slideY(begin: 0.1, end: 0),
+    );
   }
 
-  Widget _buildActionButtons(ThemeData theme) {
-    if (_book.isDownloaded) {
-      return Column(
-        children: [
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton.icon(
-              onPressed: _open,
-              icon: const Icon(Icons.play_arrow_rounded),
-              label: Text(
-                _book.type == 'pdf'
-                    ? 'شروع مطالعه'
-                    : _book.type == 'audio'
-                        ? 'پخش کتاب صوتی'
-                        : 'پخش ویدیو',
-                style: GoogleFonts.vazirmatn(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+  Widget _buildEmpty(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.library_books_outlined,
+              size: 90,
+              color: theme.colorScheme.primary.withOpacity(0.3),
             ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: OutlinedButton.icon(
-              onPressed: _delete,
-              icon: const Icon(Icons.delete_outline_rounded,
-                  color: Colors.red),
-              label: Text(
-                'حذف از حافظه',
-                style: GoogleFonts.vazirmatn(
-                  fontSize: 14,
-                  color: Colors.red,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.red),
-              ),
-            ),
-          ),
-        ],
-      ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0);
-    }
-
-    return Column(
-      children: [
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: ElevatedButton.icon(
-            onPressed: _downloading ? null : _download,
-            icon: _downloading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.download_rounded),
-            label: Text(
-              _downloading
-                  ? 'در حال دانلود... ${(_progress * 100).toInt()}%'
-                  : 'دریافت این اثر',
+            const SizedBox(height: 20),
+            Text(
+              'هنوز کتابی دانلود نکرده‌اید',
               style: GoogleFonts.vazirmatn(
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: FontWeight.bold,
+                color: theme.colorScheme.onSurface,
               ),
             ),
-          ),
-        ),
-        if (_downloading) ...[
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: _progress,
-              minHeight: 6,
-              backgroundColor:
-                  theme.colorScheme.onSurface.withOpacity(0.1),
-              valueColor:
-                  AlwaysStoppedAnimation(theme.colorScheme.primary),
+            const SizedBox(height: 8),
+            Text(
+              'برای دسترسی آفلاین، روی دکمه «دریافت این اثر» بزنید',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.vazirmatn(
+                fontSize: 13,
+                color: theme.colorScheme.onSurface.withOpacity(0.6),
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _bookGridItem(ThemeData theme, BookModel book, int index) {
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => BookDetailScreen(book: book),
           ),
-        ],
-      ],
-    ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0);
+        );
+        _load();
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: theme.colorScheme.primary.withOpacity(0.12),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: BookCover(
+                    book: book,
+                    width: 110,
+                    height: 150,
+                    radius: 12,
+                    // ✅ اصلاح: استفاده از fileBaseUrl
+                    baseUrl: ApiService.fileBaseUrl,
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    book.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.vazirmatn(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.storage_rounded,
+                          size: 12,
+                          color: theme.colorScheme.onSurface
+                              .withOpacity(0.5)),
+                      const SizedBox(width: 3),
+                      Text(
+                        book.readableSize,
+                        style: GoogleFonts.vazirmatn(
+                          fontSize: 10,
+                          color: theme.colorScheme.onSurface
+                              .withOpacity(0.5),
+                        ),
+                      ),
+                      const Spacer(),
+                      Icon(Icons.download_done_rounded,
+                          size: 14, color: Colors.green.shade600),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    )
+        .animate()
+        .fadeIn(delay: (60 * index).ms, duration: 400.ms)
+        .slideY(begin: 0.1, end: 0);
   }
 }
