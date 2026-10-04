@@ -15,7 +15,7 @@ dependencies:
   provider: ^6.1.2
   flutter_riverpod: ^2.5.1
 
-  universal_downloader: ^1.0.1
+  dio: ^5.7.0
 
   # ==================== Local Database ====================
   sqflite: ^2.3.3
